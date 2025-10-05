@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CleanSky — Live Air Quality & Forecast</title>
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <style>
+    html,body,#app { height: 100%; }
+    #app { display: grid; grid-template-columns: 360px 1fr; gap: 0; }
+    #sidebar { padding: 20px; background: linear-gradient(180deg,#ffffffcc,#f8fafc); overflow:auto; box-shadow: 6px 0 30px rgba(2,6,23,0.06);}
+    #mapWrap { position: relative; }
+    #map { position: absolute; inset: 20px; border-radius: 12px; box-shadow: 0 12px 40px rgba(2,6,23,0.12); }
+    .stat { font-weight:700; font-size:1.8rem; transition: color .3s ease; }
+    .muted { color: #6b7280; }
+    .card { transition: transform .2s ease, box-shadow .2s ease; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+    @media(max-width:900px){ #app { grid-template-columns: 1fr; } #map { inset: 10px; } #sidebar { order:2; } #mapWrap { order:1; height: 50vh; } }
+  </style>
+
+</head>
+<body class="bg-gradient-to-br from-sky-50 to-indigo-100">
+  <div id="app">
+    <!-- SIDEBAR -->
+    <aside id="sidebar" class="animate-fade-in">
+      <div class="flex items-center gap-3 mb-6">
+        <div class="w-12 h-12 rounded-lg flex items-center justify-center bg-gradient-to-tr from-sky-500 to-indigo-600 text-white font-bold shadow">CS</div>
+        <div>
+          <div class="text-lg font-semibold">CleanSky</div>
+          <div class="muted text-xs">From EarthData to Action — Cleaner, Safer Skies</div>
+        </div>
+      </div>
+      <div class="mb-6 card bg-white rounded-lg p-4 shadow">
+        <label class="text-sm muted">Country</label>
+        <select id="countrySelect" class="w-full mt-2 p-2 border rounded"></select>
+        <label class="text-sm muted mt-3">City</label>
+        <select id="citySelect" class="w-full mt-2 p-2 border rounded"></select>
+        <div class="flex gap-2 mt-3">
+          <button id="fetchBtn" class="flex-1 bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700 transition">Fetch</button>
+          <button id="refreshBtn" class="px-3 py-2 border rounded hover:bg-slate-100 transition">Refresh</button>
+        </div>
+      </div>
+
+      <div class="mb-6 card bg-white rounded-lg p-4 shadow">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="muted text-sm">Location</div>
+            <div id="locName" class="font-semibold">—</div>
+          </div>
+          <div class="text-right">
+            <div class="muted text-sm">Last updated</div>
+            <div id="lastUpdated">—</div>
+          </div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-3 gap-3">
+          <div class="p-3 bg-slate-50 rounded text-center">
+            <div class="muted text-xs">PM2.5</div>
+            <div id="v_pm25" class="stat text-sky-600">—</div>
+          </div>
+          <div class="p-3 bg-slate-50 rounded text-center">
+            <div class="muted text-xs">PM10</div>
+            <div id="v_pm10" class="stat text-sky-600">—</div>
+          </div>
+          <div class="p-3 bg-slate-50 rounded text-center">
+            <div class="muted text-xs">NO₂</div>
+            <div id="v_no2" class="stat text-sky-600">—</div>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <div class="muted text-sm">AQI (proxy)</div>
+          <div id="aqiValue" class="text-5xl font-extrabold text-sky-600">—</div>
+          <div id="aqiLabel" class="muted">—</div>
+        </div>
+      </div>
+
+      <div class="mb-6 card bg-white rounded-lg p-4 shadow">
+        <div class="muted text-sm">Current Weather</div>
+        <div class="mt-3 flex items-center gap-3">
+          <div id="weatherIcon" class="w-12 h-12 bg-slate-100 rounded flex items-center justify-center text-2xl">☀️</div>
+          <div>
+            <div id="temp" class="text-2xl font-semibold">—°</div>
+            <div id="wind" class="muted text-sm">—</div>
+          </div>
+        </div>
+        <div class="mt-4">
+          <div class="muted text-sm">2-week Forecast</div>
+          <canvas id="weatherForecast" height="120"></canvas>
+        </div>
+      </div>
+
+      <div class="card bg-white rounded-lg p-4 shadow">
+        <h4 class="font-semibold">Recommendations</h4>
+        <div id="recs" class="muted mt-2">—</div>
+      </div>
+
+      <div class="mt-4 muted text-xs text-center">Powered by OpenAQ, Open-Meteo & NASA GIBS 🌍</div>
+    </aside>
+
+    <!-- MAP -->
+    <div id="mapWrap" class="relative">
+      <div id="map"></div>
+      <div style="position:absolute;top:20px;right:24px;z-index:9999">
+        <label class="inline-flex items-center gap-2 bg-white p-2 rounded shadow cursor-pointer">
+          <input id="satToggle" type="checkbox"> <span class="muted text-sm">Satellite (GIBS)</span>
+        </label>
+      </div>
+      <div style="position:absolute;bottom:24px;left:24px;z-index:9999">
+        <div class="bg-white p-3 rounded shadow text-center">
+          <div class="muted text-sm">Stations</div>
+          <div id="stationCount" class="font-bold">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ========== Config ========== */
+    const API_BASE = "http://127.0.0.1:8000";
+    /* ============================ */
+
+    let map, baseLayer, satLayer, markers = [], weatherChart;
+    let selectedCountry = 'UZ';
+    let selectedCity = 'Tashkent';
+
+    function initMap() {
+      map = L.map('map', { preferCanvas: true }).setView([41.3111, 69.2797], 6);
+      baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+      document.getElementById('map').style.height = (window.innerHeight - 40) + 'px';
+    }
+
+    function addGIBS() {
+      const layer = "MODIS_Terra_CorrectedReflectance_TrueColor";
+      const date = new Date().toISOString().slice(0, 10);
+      const tmpl = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+      satLayer = L.tileLayer(tmpl, { opacity: 0.6, attribution: 'NASA GIBS' }).addTo(map);
+    }
+    function removeGIBS() { if (satLayer) map.removeLayer(satLayer); satLayer = null; }
+
+    function clearMarkers() { markers.forEach(m => map.removeLayer(m)); markers = []; }
+
+    async function callApi(path) {
+      try {
+        const r = await fetch(API_BASE + path);
+        if (!r.ok) throw new Error(await r.text());
+        return await r.json();
+      } catch (e) {
+        console.error("API", path, e);
+        return { error: String(e) };
+      }
+    }
+
+    /* AQI Calculation (US EPA Standard) */
+    function calculateAqi(pm25) {
+      const breakpoints = [
+        [0.0, 12.0, 0, 50, "Good"],
+        [12.1, 35.4, 51, 100, "Moderate"],
+        [35.5, 55.4, 101, 150, "Unhealthy for Sensitive Groups"],
+        [55.5, 150.4, 151, 200, "Unhealthy"],
+        [150.5, 250.4, 201, 300, "Very Unhealthy"],
+        [250.5, 500.4, 301, 500, "Hazardous"]
+      ];
+
+      for (const [c_low, c_high, i_low, i_high, label] of breakpoints) {
+        if (pm25 >= c_low && pm25 <= c_high) {
+          const aqi = Math.round(((i_high - i_low) / (c_high - c_low)) * (pm25 - c_low) + i_low);
+          return { aqi, label };
+        }
+      }
+      return { aqi: null, label: "Invalid" };
+    }
+
+    /* AQI colors */
+    function aqiColor(aqi) {
+      if (aqi > 300) return "text-red-800";
+      if (aqi > 200) return "text-purple-600";
+      if (aqi > 150) return "text-red-600";
+      if (aqi > 100) return "text-orange-500";
+      if (aqi > 60) return "text-yellow-500";
+      return "text-green-600";
+    }
+
+    /* Populate countries & cities */
+    async function loadCountries() {
+      const res = await callApi('/countries');
+      const sel = document.getElementById('countrySelect');
+      sel.innerHTML = '';
+      if (res.countries) {
+        res.countries.sort((a, b) => a.name.localeCompare(b.name));
+        res.countries.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.code;
+          opt.text = `${c.name} (${c.code})`;
+          sel.appendChild(opt);
+          if(c.code === 'UZ') sel.value = 'UZ'; // Default to Uzbekistan
+        });
+        await loadCities(sel.value);
+      }
+    }
+
+    async function loadCities(code) {
+      const res = await callApi(`/cities?country=${code}`);
+      const sel = document.getElementById('citySelect');
+      sel.innerHTML = '';
+      if (res.cities) {
+        res.cities.slice(0, 80).forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.city;
+          opt.text = c.city;
+          sel.appendChild(opt);
+        });
+        if (code === 'UZ') {
+          sel.value = 'Tashkent';
+        }
+      }
+    }
+
+    /* Update forecast chart */
+    function updateForecastChart(data) {
+      if (weatherChart) weatherChart.destroy();
+      const ctx = document.getElementById('weatherForecast').getContext('2d');
+      weatherChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.time,
+          datasets: [{
+            label: 'Max Temp (°C)',
+            data: data.temperature_2m_max,
+            borderColor: 'rgb(255, 99, 132)',
+            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+            fill: false,
+            tension: 0.1
+          }, {
+            label: 'Min Temp (°C)',
+            data: data.temperature_2m_min,
+            borderColor: 'rgb(54, 162, 235)',
+            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+            fill: false,
+            tension: 0.1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: { y: { beginAtZero: false } },
+          plugins: { legend: { display: true } }
+        }
+      });
+    }
+
+    /* Provide recommendations based on AQI */
+    function getRecommendations(aqi) {
+      if (aqi <= 50) return "Air quality is considered satisfactory, and air pollution poses little or no risk.";
+      if (aqi <= 100) return "Air quality is acceptable; however, for some pollutants there may be a moderate health concern for a very small number of people who are unusually sensitive to air pollution.";
+      if (aqi <= 150) return "Members of sensitive groups may experience health effects. The general public is not likely to be affected.";
+      if (aqi <= 200) return "Everyone may begin to experience health effects; members of sensitive groups may experience more serious health effects.";
+      if (aqi <= 300) return "Health warnings of emergency conditions. The entire population is more likely to be affected.";
+      return "Health alert: everyone may experience more serious health effects.";
+    }
+
+    /* Fetch AQ data + weather */
+    async function fetchAll() {
+      const city = document.getElementById('citySelect').value;
+      if (!city) return;
+      document.getElementById('locName').textContent = city;
+      document.getElementById('lastUpdated').textContent = '...';
+
+      const aq = await callApi(`/air-quality?city=${encodeURIComponent(city)}`);
+      const agg = aq.aggregated || {};
+      const pm25 = agg.pm25 || 0;
+
+      document.getElementById('v_pm25').textContent = pm25 ? pm25.toFixed(1) : '—';
+      document.getElementById('v_pm10').textContent = agg.pm10 ? agg.pm10.toFixed(1) : '—';
+      document.getElementById('v_no2').textContent = agg.no2 ? agg.no2.toFixed(1) : '—';
+      document.getElementById('lastUpdated').textContent = aq.last_updated ? new Date(aq.last_updated).toLocaleString() : '—';
+
+      const { aqi, label } = calculateAqi(pm25);
+      const aqiEl = document.getElementById('aqiValue');
+      const aqiLabelEl = document.getElementById('aqiLabel');
+
+      if (aqi !== null) {
+        aqiEl.textContent = aqi;
+        aqiEl.className = `text-5xl font-extrabold ${aqiColor(aqi)}`;
+        aqiLabelEl.textContent = label;
+      } else {
+        aqiEl.textContent = '—';
+        aqiEl.className = "text-5xl font-extrabold text-sky-600";
+        aqiLabelEl.textContent = '—';
+      }
+
+      document.getElementById('recs').textContent = getRecommendations(aqi);
+
+      clearMarkers();
+      const locations = aq.locations || [];
+      document.getElementById('stationCount').textContent = locations.length;
+      let cityLat = 0, cityLon = 0, count = 0;
+
+      locations.forEach(loc => {
+        if (loc.coordinates) {
+          const lat = loc.coordinates.latitude;
+          const lon = loc.coordinates.longitude;
+          L.circleMarker([lat, lon], { color: 'indigo', radius: 5, fillOpacity: 0.8 }).addTo(map)
+            .bindPopup(`<b>${loc.name}</b><br>PM2.5: ${loc.measurements.find(m => m.parameter === 'pm25')?.value || 'N/A'}`);
+          cityLat += lat;
+          cityLon += lon;
+          count++;
+        }
+      });
+      if (count > 0) map.setView([cityLat / count, cityLon / count], 10);
+
+      // Fetch weather
+      if (count > 0) {
+        const lat = cityLat / count;
+        const lon = cityLon / count;
+        const weather = await callApi(`/weather?lat=${lat}&lon=${lon}`);
+        const cw = weather.current_weather || {};
+        document.getElementById('temp').textContent = cw.temperature ? `${cw.temperature}°C` : '—';
+        document.getElementById('wind').textContent = cw.windspeed ? `Wind: ${cw.windspeed} km/h` : '—';
+
+        const forecast = await callApi(`/forecast?lat=${lat}&lon=${lon}&days=14`);
+        if (forecast.daily) {
+          updateForecastChart(forecast.daily);
+        }
+      }
+    }
+
+    /* Event Listeners */
+    document.getElementById('countrySelect').addEventListener('change', e => loadCities(e.target.value));
+    document.getElementById('fetchBtn').addEventListener('click', fetchAll);
+    document.getElementById('refreshBtn').addEventListener('click', fetchAll);
+    document.getElementById('satToggle').addEventListener('change', e => {
+      e.target.checked ? addGIBS() : removeGIBS();
+    });
+
+    /* Initial Load */
+    window.onload = () => {
+      initMap();
+      loadCountries();
+    };
+  </script>
+</body>
+</html>
